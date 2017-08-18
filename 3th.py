@@ -2,6 +2,7 @@ import pandas as pd
 import numpy as np
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 import torch.optim as optim
 from torch.autograd import Variable
 import copy
@@ -34,15 +35,14 @@ def save_checkpoint(state, filename='layer.pth.tar'):
 
 model = network.DenseNet(growthRate=12, depth=100, reduction=0.5, bottleneck=True, nClasses=10).cuda()
 
-criterion = nn.CrossEntropyLoss()
-optimizer = optim.SGD(model.parameters(), lr=0.001, momentum=0.9)
+optimizer = optim.SGD(model.parameters(), lr=1e-1, momentum=0.9, weight_decay=1e-4)
 
 best_model = model
 best_acc = 0.0
 for epoch in range(500):
     running_loss = 0.0
-    running_corrects = 0.0
-    val_corrects = 0.0
+    running_corrects = 0
+    val_corrects = 0
 
     for i in range(40, 40001, 40):
         inputs = X_train[i-40:i]
@@ -57,7 +57,7 @@ for epoch in range(500):
 
         outputs = model(inputs)
         _, preds = torch.max(outputs.data, 1)
-        loss = criterion(outputs, labels)
+        loss = F.nll_loss(outputs, labels)
         loss.backward()
         optimizer.step()
 
@@ -65,7 +65,7 @@ for epoch in range(500):
         running_loss += loss.data[0]
         running_corrects += torch.sum(preds == labels.data)
 
-    for j in range(40000, 42001, 40):
+    for j in range(40040, 42001, 40):
         inputs = X_train[j-40:j]
         labels = np.array(Y_train[j-40:j], dtype=np.int64)
         inputs = torch.FloatTensor(inputs)

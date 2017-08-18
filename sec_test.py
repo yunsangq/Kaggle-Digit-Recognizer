@@ -65,7 +65,7 @@ class Net(nn.Module):
         return x
 
 
-net = torch.load("8.pth.tar").cuda()
+net = torch.load("second.pth.tar").cuda()
 
 train = pd.read_csv('train.csv')
 Y_train = train.ix[:,0].values.astype('int32')
@@ -91,15 +91,19 @@ X_test = X_test.reshape(28000, 1, 28, 28)
 
 print('Validation...')
 
-inputs = X_train[40000:42000]
-labels = np.array(Y_train[40000:42000], dtype=np.int64)
-inputs = torch.FloatTensor(inputs)
-labels = torch.LongTensor(labels)
-inputs, labels = Variable(inputs).cuda(), Variable(labels).cuda()
-outputs = net(inputs)
-_, preds = torch.max(outputs.data, 1)
-val_corrects = torch.sum(preds == labels.data)
-val_acc = val_corrects/2000
+val_corrects = 0
+for j in range(40040, 42001, 40):
+    inputs = X_train[j - 40:j]
+    labels = np.array(Y_train[j - 40:j], dtype=np.int64)
+    inputs = torch.FloatTensor(inputs)
+    labels = torch.LongTensor(labels)
+    inputs, labels = Variable(inputs).cuda(), Variable(labels).cuda()
+
+    outputs = net(inputs)
+    _, preds = torch.max(outputs.data, 1)
+    val_corrects += torch.sum(preds == labels.data)
+
+val_acc = val_corrects / 2000
 print(val_acc)
 '''
 print('Testing...')

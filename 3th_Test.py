@@ -8,7 +8,7 @@ import network
 def write_preds(preds, fname):
     pd.DataFrame({"ImageId": list(range(1,len(preds)+1)), "Label": preds}).to_csv(fname, index=False, header=True)
 
-net = torch.load("8.pth.tar").cuda()
+net = torch.load("20.pth.tar").cuda()
 
 train = pd.read_csv('train.csv')
 Y_train = train.ix[:,0].values.astype('int32')
