@@ -3,3 +3,5 @@
 network.py
 .idea/
 __pycache__/
+data/
+*.csv#
