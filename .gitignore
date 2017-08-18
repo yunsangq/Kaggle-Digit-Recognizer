@@ -1,0 +1,5 @@
+*.tar
+*.csv
+network.py
+.idea/
+__pycache__/
