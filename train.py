@@ -5,26 +5,91 @@ import torch.nn as nn
 import torch.optim as optim
 from torch.autograd import Variable
 import torch.nn.functional as F
-from torchvision import transforms, models
+from torchvision import transforms
+from torch.utils.data.dataset import Dataset
+from torch.utils.data import DataLoader
 import matplotlib.pyplot as plt
 from PIL import Image
 import copy
 
 
-train = pd.read_csv('train.csv')
-Y_train = train.ix[:,0].values.astype('int32')
-X_train = (train.ix[:,1:].values).astype('float32')
-X_test = (pd.read_csv('test.csv').values).astype('float32')
+TRAIN_DATA = 'train.csv'
 
-scale = np.max(X_train)
-X_train /= scale
-X_test /= scale
 
-mean = np.std(X_train)
-X_train -= mean
-X_test -= mean
+class KaggleDataset(Dataset):
+    """Dataset wrapping images and target labels for Kaggle.
 
-X_train = X_train.reshape(42000, 1, 28, 28)
+    Arguments:
+        A CSV file path
+        Path to image folder
+        Extension of images
+        PIL transforms
+    """
+
+    def __init__(self, csv_path, transform=None, mode=0, valid_size=1000):
+        self.mode = mode
+        tmp_df = pd.read_csv(csv_path)
+
+        self.transform = transform
+        if self.mode == 0: # train
+            self.X_train = (tmp_df.ix[:, 1:].values).astype('float32')[valid_size:]
+            self.X_train = self.X_train.reshape(len(self.X_train), 28, 28).astype('uint8')
+            self.y_train = tmp_df.ix[:, 0].values.astype('int64')[valid_size:].reshape(len(self.X_train), 1)
+        elif self.mode == 1: # val
+            self.X_train = (tmp_df.ix[:, 1:].values).astype('float32')[:valid_size]
+            self.X_train = self.X_train.reshape(len(self.X_train), 28, 28).astype('uint8')
+            self.y_train = tmp_df.ix[:, 0].values.astype('int64')[:valid_size].reshape(len(self.X_train), 1)
+        else: # test
+            self.X_train = (tmp_df.values).astype('float32')
+            self.X_train = self.X_train.reshape(len(self.X_train), 28, 28).astype('uint8')
+
+    def __getitem__(self, index):
+        img = Image.fromarray(self.X_train[index])
+        if self.transform is not None:
+            img = self.transform(img)
+
+        if self.mode == 2:
+            return img
+        else:
+            label = torch.from_numpy(self.y_train[index])
+            return img, label
+
+    def __len__(self):
+        return len(self.X_train)
+
+
+train_transformations = transforms.Compose([
+    # transforms.Scale(35),
+    # transforms.RandomCrop(28),
+    # transforms.RandomSizedCrop(28),
+    transforms.ToTensor(),
+    transforms.Normalize(mean=[0.1309], std=[0.3084])
+])
+
+valid_transformations = transforms.Compose([
+    transforms.ToTensor(),
+    transforms.Normalize(mean=[0.1309], std=[0.3084])
+])
+
+dset_train = KaggleDataset(TRAIN_DATA, train_transformations)
+dset_valid = KaggleDataset(TRAIN_DATA, valid_transformations, mode=1, valid_size=1000)
+dset_test = KaggleDataset('test.csv', valid_transformations, mode=2)
+
+
+train_loader = DataLoader(dset_train,
+                          batch_size=128,
+                          shuffle=True,
+                          num_workers=4)
+
+valid_loader = DataLoader(dset_valid,
+                          batch_size=100,
+                          shuffle=False,
+                          num_workers=1)
+
+test_loader = DataLoader(dset_test,
+                         batch_size=100,
+                         shuffle=False,
+                         num_workers=4)
 
 
 def save_checkpoint(state, filename='layer.pth.tar'):
@@ -49,21 +114,7 @@ class Net(nn.Module):
         self.batch_norm6 = nn.BatchNorm2d(256)
         self.conv7 = nn.Conv2d(256, 256, kernel_size=3, padding=1)
         self.batch_norm7 = nn.BatchNorm2d(256)
-        '''
-        self.conv8 = nn.Conv2d(256, 512, kernel_size=3, padding=1)
-        self.batch_norm8 = nn.BatchNorm2d(512)
-        self.conv9 = nn.Conv2d(512, 512, kernel_size=3, padding=1)
-        self.batch_norm9 = nn.BatchNorm2d(512)
-        self.conv10 = nn.Conv2d(512, 512, kernel_size=3, padding=1)
-        self.batch_norm10 = nn.BatchNorm2d(512)
-        
-        self.conv11 = nn.Conv2d(512, 1024, kernel_size=3, padding=1)
-        self.batch_norm11 = nn.BatchNorm2d(1024)
-        self.conv12 = nn.Conv2d(1024, 1024, kernel_size=3, padding=1)
-        self.batch_norm12 = nn.BatchNorm2d(1024)
-        self.conv13 = nn.Conv2d(1024, 1024, kernel_size=3, padding=1)
-        self.batch_norm13 = nn.BatchNorm2d(1024)
-        '''
+
         self.avgpool = nn.AvgPool2d(7)
         self.fc = nn.Linear(256, 10)
 
@@ -78,90 +129,276 @@ class Net(nn.Module):
         x = F.relu(self.batch_norm5(self.conv5(x)))
         x = F.relu(self.batch_norm6(self.conv6(x)))
         x = F.relu(self.batch_norm7(self.conv7(x)))
-        '''
-        x = F.relu(self.batch_norm8(self.conv8(x)))
-        x = F.relu(self.batch_norm9(self.conv9(x)))
-        x = F.relu(self.batch_norm10(self.conv10(x)))
-        
-        x = F.relu(self.batch_norm11(self.conv11(x)))
-        x = F.relu(self.batch_norm12(self.conv12(x)))
-        x = F.relu(self.batch_norm13(self.conv13(x)))
-        '''
+
         # 1*1
         x = self.avgpool(x)
         x = x.view(x.size(0), -1)
         x = self.fc(x)
-        return x
+        return F.log_softmax(x)
 
 
-model = Net().cuda()
+class Net1(nn.Module):
+    def __init__(self):
+        super(Net1, self).__init__()
+        self.conv1 = nn.Conv2d(1, 64, kernel_size=3, padding=1)
+        self.batch_norm1 = nn.BatchNorm2d(64)
+        self.conv2 = nn.Conv2d(64, 64, kernel_size=3, padding=1)
+        self.batch_norm2 = nn.BatchNorm2d(64)
+        self.conv3 = nn.Conv2d(64, 128, kernel_size=3, padding=1)
+        self.batch_norm3 = nn.BatchNorm2d(128)
+        self.conv4 = nn.Conv2d(128, 128, kernel_size=3, padding=1)
+        self.batch_norm4 = nn.BatchNorm2d(128)
+
+        self.conv5 = nn.Conv2d(128, 256, kernel_size=3, padding=1)
+        self.batch_norm5 = nn.BatchNorm2d(256)
+        self.conv6 = nn.Conv2d(256, 256, kernel_size=3, padding=1)
+        self.batch_norm6 = nn.BatchNorm2d(256)
+        self.conv7 = nn.Conv2d(256, 256, kernel_size=3, padding=1)
+        self.batch_norm7 = nn.BatchNorm2d(256)
+
+        self.conv8 = nn.Conv2d(256, 512, kernel_size=3, padding=1)
+        self.batch_norm8 = nn.BatchNorm2d(512)
+        self.conv9 = nn.Conv2d(512, 512, kernel_size=3, padding=1)
+        self.batch_norm9 = nn.BatchNorm2d(512)
+        self.conv10 = nn.Conv2d(512, 512, kernel_size=3, padding=1)
+        self.batch_norm10 = nn.BatchNorm2d(512)
+
+        self.avgpool = nn.AvgPool2d(3)
+        self.fc = nn.Linear(512, 10)
+
+    def forward(self, x):
+        # 28*28
+        x = F.relu(self.batch_norm1(self.conv1(x)))
+        x = F.max_pool2d(F.relu(self.batch_norm2(self.conv2(x))), 2)
+        # 14*14
+        x = F.relu(self.batch_norm3(self.conv3(x)))
+        x = F.max_pool2d(F.relu(self.batch_norm4(self.conv4(x))), 2)
+        # 7*7
+        x = F.relu(self.batch_norm5(self.conv5(x)))
+        x = F.relu(self.batch_norm6(self.conv6(x)))
+        x = F.max_pool2d(F.relu(self.batch_norm7(self.conv7(x))), 2)
+        # 3*3
+        x = F.relu(self.batch_norm8(self.conv8(x)))
+        x = F.relu(self.batch_norm9(self.conv9(x)))
+        x = F.relu(self.batch_norm10(self.conv10(x)))
+
+        # 1*1
+        x = self.avgpool(x)
+        x = x.view(x.size(0), -1)
+        x = self.fc(x)
+        return F.log_softmax(x)
+
+
+class Net2(nn.Module):
+    def __init__(self):
+        super(Net2, self).__init__()
+        self.conv1 = nn.Conv2d(1, 64, kernel_size=3, padding=1)
+        self.batch_norm1 = nn.BatchNorm2d(64)
+        self.conv2 = nn.Conv2d(64, 64, kernel_size=3, padding=1)
+        self.batch_norm2 = nn.BatchNorm2d(64)
+        self.conv3 = nn.Conv2d(64, 128, kernel_size=3, padding=1)
+        self.batch_norm3 = nn.BatchNorm2d(128)
+        self.conv4 = nn.Conv2d(128, 128, kernel_size=3, padding=1)
+        self.batch_norm4 = nn.BatchNorm2d(128)
+
+        self.conv5 = nn.Conv2d(128, 256, kernel_size=3, padding=1)
+        self.batch_norm5 = nn.BatchNorm2d(256)
+        self.conv6 = nn.Conv2d(256, 256, kernel_size=3, padding=1)
+        self.batch_norm6 = nn.BatchNorm2d(256)
+        self.conv7 = nn.Conv2d(256, 256, kernel_size=3, padding=1)
+        self.batch_norm7 = nn.BatchNorm2d(256)
+
+        self.conv8 = nn.Conv2d(256, 512, kernel_size=3, padding=1)
+        self.batch_norm8 = nn.BatchNorm2d(512)
+        self.conv9 = nn.Conv2d(512, 512, kernel_size=3, padding=1)
+        self.batch_norm9 = nn.BatchNorm2d(512)
+        self.conv10 = nn.Conv2d(512, 512, kernel_size=3, padding=1)
+        self.batch_norm10 = nn.BatchNorm2d(512)
+
+        self.fc = nn.Linear(4608, 10)
+
+    def forward(self, x):
+        # 28*28
+        x = F.relu(self.batch_norm1(self.conv1(x)))
+        x = F.max_pool2d(F.relu(self.batch_norm2(self.conv2(x))), 2)
+        # 14*14
+        x = F.relu(self.batch_norm3(self.conv3(x)))
+        x = F.max_pool2d(F.relu(self.batch_norm4(self.conv4(x))), 2)
+        # 7*7
+        x = F.relu(self.batch_norm5(self.conv5(x)))
+        x = F.relu(self.batch_norm6(self.conv6(x)))
+        x = F.max_pool2d(F.relu(self.batch_norm7(self.conv7(x))), 2)
+        # 3*3
+        x = F.relu(self.batch_norm8(self.conv8(x)))
+        x = F.relu(self.batch_norm9(self.conv9(x)))
+        x = F.relu(self.batch_norm10(self.conv10(x)))
+
+        x = x.view(x.size(0), -1)
+        x = self.fc(x)
+        return F.log_softmax(x)
+
+
+class Net3(nn.Module):
+    def __init__(self):
+        super(Net3, self).__init__()
+        self.conv1 = nn.Conv2d(1, 64, kernel_size=3, padding=1)
+        self.batch_norm1 = nn.BatchNorm2d(64)
+        self.conv2 = nn.Conv2d(64, 64, kernel_size=3, padding=1)
+        self.batch_norm2 = nn.BatchNorm2d(64)
+        self.conv3 = nn.Conv2d(64, 128, kernel_size=3, padding=1)
+        self.batch_norm3 = nn.BatchNorm2d(128)
+        self.conv4 = nn.Conv2d(128, 128, kernel_size=3, padding=1)
+        self.batch_norm4 = nn.BatchNorm2d(128)
+
+        self.conv5 = nn.Conv2d(128, 256, kernel_size=3, padding=1)
+        self.batch_norm5 = nn.BatchNorm2d(256)
+        self.conv6 = nn.Conv2d(256, 256, kernel_size=3, padding=1)
+        self.batch_norm6 = nn.BatchNorm2d(256)
+        self.conv7 = nn.Conv2d(256, 256, kernel_size=3, padding=1)
+        self.batch_norm7 = nn.BatchNorm2d(256)
+
+        self.fc = nn.Linear(256*3*3, 10)
+
+    def forward(self, x):
+        # 28*28
+        x = F.relu(self.batch_norm1(self.conv1(x)))
+        x = F.max_pool2d(F.relu(self.batch_norm2(self.conv2(x))), 2)
+        # 14*14
+        x = F.relu(self.batch_norm3(self.conv3(x)))
+        x = F.max_pool2d(F.relu(self.batch_norm4(self.conv4(x))), 2)
+        # 7*7
+        x = F.relu(self.batch_norm5(self.conv5(x)))
+        x = F.relu(self.batch_norm6(self.conv6(x)))
+        x = F.max_pool2d(F.relu(self.batch_norm7(self.conv7(x))), 2)
+
+        # 3*3
+        x = x.view(x.size(0), -1)
+        x = self.fc(x)
+        return F.log_softmax(x)
+
+
+model = Net3().cuda()
 
 criterion = nn.CrossEntropyLoss()
-optimizer = optim.SGD(model.parameters(), lr=1e-1, momentum=0.9)
+optimizer_conv = optim.SGD(model.parameters(), lr=0.001, momentum=0.9)
 
-best_model = model
-best_acc = 0.0
-for epoch in range(1000):
-    running_loss = 0.0
-    running_corrects = 0.0
-    val_corrects = 0.0
-    val_loss = 0.0
-    train_len = 0
-    val_len = 0
-    for i in range(40, 41801, 40):
-        inputs = X_train[i-40:i]
-        labels = np.array(Y_train[i-40:i], dtype=np.int64)
 
-        inputs = torch.FloatTensor(inputs)
-        labels = torch.LongTensor(labels)
+def exp_lr_scheduler(optimizer, epoch, init_lr=0.001, lr_decay_epoch=20):
+    lr = init_lr * (0.1**(epoch//lr_decay_epoch))
+    if lr >= 0.00001:
+        if epoch % lr_decay_epoch == 0:
+            print('LR is set to {}'.format(lr))
 
-        inputs, labels = Variable(inputs).cuda(), Variable(labels).cuda()
+        for param_group in optimizer.param_groups:
+            param_group['lr'] = lr
 
-        optimizer.zero_grad()
+    return optimizer
 
-        outputs = model(inputs)
-        _, preds = torch.max(outputs.data, 1)
-        loss = criterion(outputs, labels)
-        loss.backward()
-        optimizer.step()
 
-        running_loss += loss.data[0]
-        running_corrects += torch.sum(preds == labels.data)
-        train_len += 40
+def train(_model, _epoch, optimizer, lr_scheduler):
+    best_model = _model
+    best_acc = 0.0
+    for epoch in range(_epoch):
+        running_loss = 0.0
+        running_corrects = 0.0
+        val_corrects = 0.0
+        val_loss = 0.0
+        train_len = 0
+        val_len = 0
 
-    for j in range(41840, 42001, 40):
-        inputs = X_train[j-40:j]
-        labels = np.array(Y_train[j-40:j], dtype=np.int64)
-        inputs = torch.FloatTensor(inputs)
-        labels = torch.LongTensor(labels)
-        inputs, labels = Variable(inputs).cuda(), Variable(labels).cuda()
+        model.train(True)
+        optimizer = lr_scheduler(optimizer, epoch)
+        for batch_idx, (data, target) in enumerate(train_loader):
+            data, target = Variable(data).cuda(), Variable(target).squeeze().cuda()
+            '''
+            plt.imshow(data.data.cpu().numpy()[0][0])
+            plt.show()
+            '''
+            optimizer.zero_grad()
+            output = _model(data)
+            _, preds = torch.max(output.data, 1)
+            loss = criterion(output, target)
+            loss.backward()
+            optimizer.step()
 
-        outputs = model(inputs)
-        _, preds = torch.max(outputs.data, 1)
-        loss = criterion(outputs, labels)
-        val_loss += loss.data[0]
-        val_corrects += torch.sum(preds == labels.data)
-        val_len +=40
+            running_loss += loss.data[0]
+            running_corrects += torch.sum(preds == target.data)
+            train_len += data.size()[0]
 
-    val_loss = val_loss/200
-    val_acc = val_corrects/200
+        model.train(False)
+        for batch_idx, (data, target) in enumerate(valid_loader):
+            data, target = Variable(data).cuda(), Variable(target).squeeze().cuda()
+            output = _model(data)
+            _, preds = torch.max(output.data, 1)
+            loss = criterion(output, target)
 
-    # print(train_len, val_len)
-    print('[%d] loss: %f train_acc: %.4f val_loss: %f val_acc: %.4f' %
-          (epoch + 1, running_loss/41800, running_corrects/41800, val_loss, val_acc))
-    
-    if val_acc >= best_acc:
-        best_acc = val_acc
-        best_model = copy.deepcopy(model)
-        save_checkpoint(best_model, filename=str(epoch) + '.pth.tar')
-    '''
-    running_acc = running_corrects / 42000
-    print('[%d] loss: %f train_acc: %.4f' %
-          (epoch + 1, running_loss / 42000, running_acc))
+            val_loss += loss.data[0]
+            val_corrects += torch.sum(preds == target.data)
+            val_len += data.size()[0]
 
-    if running_acc >= best_acc:
-        best_acc = running_acc
-        best_model = copy.deepcopy(model)
-        save_checkpoint(best_model, filename=str(epoch) + '.pth.tar')
-    '''
-print('Finished Training')
+        val_loss = val_loss/val_len
+        val_acc = val_corrects/val_len
+
+        print('[%d] train_loss: %f train_acc: %.4f, val_loss: %f val_acc: %.4f' %
+              (epoch + 1, running_loss/train_len, running_corrects/train_len,
+               val_loss, val_acc))
+
+        if val_acc >= best_acc:
+            best_acc = val_acc
+            best_model = copy.deepcopy(_model)
+            save_checkpoint(best_model, filename=str(epoch) + '.pth.tar')
+
+    return best_model
+
+
+def write_preds(preds, fname):
+    pd.DataFrame({"ImageId": list(range(1,len(preds)+1)), "Label": preds}).to_csv(fname, index=False, header=True)
+
+total_predictions = np.zeros((28000, 10), dtype=np.float64)
+
+
+def single_test(file):
+    test_model = torch.load(file).cuda()
+    test_model.train(False)
+    test_len = 0
+    predictions = np.zeros(28000, dtype=np.int64)
+    for batch_idx, data in enumerate(test_loader):
+        data = Variable(data).cuda()
+        output = test_model(data)
+        _, preds = torch.max(output.data, 1)
+        preds = preds.cpu().numpy()
+        preds = preds.squeeze()
+        predictions[test_len:test_len + data.size()[0]] = preds
+        test_len += data.size()[0]
+    return predictions
+
+
+def run_test(file):
+    test_model = torch.load(file).cuda()
+    test_model.train(False)
+    test_len = 0
+    predictions = np.zeros((28000, 10), dtype=np.float64)
+    for batch_idx, data in enumerate(test_loader):
+        data = Variable(data).cuda()
+        output = test_model(data)
+        predictions[test_len:test_len + data.size()[0]] = output.data.cpu().numpy()
+        test_len += data.size()[0]
+    return predictions
+
+'''
+b_model = train(model, 100, optimizer_conv, exp_lr_scheduler)
+save_checkpoint(b_model)
+'''
+#'''
+total_predictions += run_test('567_5.pth.tar')
+total_predictions += run_test('580_13.pth.tar')
+total_predictions += run_test('587_10.pth.tar')
+total_predictions += run_test('594_11.pth.tar')
+total_predictions += run_test('566_11.pth.tar')
+
+write_preds(np.argmax(total_predictions, axis=1), "result.csv")
+#'''
+'''
+pred = single_test('6.pth.tar')
+write_preds(pred, "result.csv")
+'''
