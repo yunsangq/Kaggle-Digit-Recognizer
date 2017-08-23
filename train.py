@@ -277,7 +277,38 @@ class Net3(nn.Module):
         return F.log_softmax(x)
 
 
-model = Net3().cuda()
+class Net4(nn.Module):
+    def __init__(self):
+        super(Net4, self).__init__()
+        self.conv1 = nn.Conv2d(1, 32, kernel_size=5, padding=2)
+        self.conv2 = nn.Conv2d(32, 32, kernel_size=5, padding=2)
+
+        self.drop1 = nn.Dropout2d(p=0.25)
+
+        self.conv3 = nn.Conv2d(32, 64, kernel_size=3, padding=1)
+        self.conv4 = nn.Conv2d(64, 64, kernel_size=3, padding=1)
+
+        self.drop2 = nn.Dropout2d(p=0.25)
+
+        self.fc = nn.Linear(64*7*7, 256)
+        self.drop3 = nn.Dropout2d(p=0.5)
+        self.fc1 = nn.Linear(256, 10)
+
+    def forward(self, x):
+        # 28*28
+        x = F.relu(self.conv1(x))
+        x = self.drop1(F.max_pool2d(F.relu(self.conv2(x)), 2))
+        # 14*14
+        x = F.relu(self.conv3(x))
+        x = self.drop2(F.max_pool2d(F.relu(self.conv4(x)), 2))
+
+        # 3*3
+        x = x.view(x.size(0), -1)
+        x = self.drop3(F.relu(self.fc(x)))
+        x = self.fc1(x)
+        return F.softmax(x)
+
+model = Net4().cuda()
 
 criterion = nn.CrossEntropyLoss()
 optimizer_conv = optim.SGD(model.parameters(), lr=0.001, momentum=0.9)
@@ -385,11 +416,11 @@ def run_test(file):
         test_len += data.size()[0]
     return predictions
 
-'''
+#'''
 b_model = train(model, 100, optimizer_conv, exp_lr_scheduler)
 save_checkpoint(b_model)
-'''
 #'''
+'''
 total_predictions += run_test('567_5.pth.tar')
 total_predictions += run_test('580_13.pth.tar')
 total_predictions += run_test('587_10.pth.tar')
@@ -397,7 +428,7 @@ total_predictions += run_test('594_11.pth.tar')
 total_predictions += run_test('566_11.pth.tar')
 
 write_preds(np.argmax(total_predictions, axis=1), "result.csv")
-#'''
+'''
 '''
 pred = single_test('6.pth.tar')
 write_preds(pred, "result.csv")
